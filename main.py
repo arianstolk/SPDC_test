@@ -281,11 +281,11 @@ class HWP(Optic):
 			raise Exception("Please provide me with a ray to act on!")
 
 		if ray.wavelength > self.cutoff:
-			if ray.polarization = "H":
+			if ray.polarization == "H":
 				ray.polarization = "V"
 			else:
 				ray.polarization = "H"
-		
+
 
 
 
