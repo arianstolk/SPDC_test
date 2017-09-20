@@ -8,6 +8,7 @@
 ###Import library###
 
 import numpy as np
+import sympy as sp
 import matplotlib
 from vpython import *
 
@@ -103,7 +104,7 @@ class Optic(object):
 		return colour
 
 	def getn(self,ray):
-		if !isinstance(ray,Ray):
+		if not isinstance(ray,Ray):
 			raise Exception("Please provide me with a ray to calculate the refractive index for!")
 
 		lam=ray.wavelength
@@ -112,7 +113,7 @@ class Optic(object):
 
 	def getdn(self,ray):
 
-		if !isinstance(ray,Ray):
+		if not isinstance(ray,Ray):
 			raise Exception("Please provide me with a ray to calculate the refractive index for!")
 
 		lam=ray.wavelength
@@ -141,60 +142,67 @@ class Crystal(Optic):
 
 	def getn(self,ray):
 
-		if !isinstance(ray,Ray):
+		if not isinstance(ray,Ray):
 			raise Exception("Please provide me with a ray to calculate the refractive index for!")
 		
-		c=self.selm_coeff(self.material)
+		c=self.selm_coeff[self.material]
 		lam=ray.wavelength
 
 		if ray.polarization == "H":
 			if self.orientation in {"left","right"}:
-				return (coeff[0]+(coeff[1])/((lam*1e-3)**2-coeff[2])-coeff[3]*(lam*1e-3)**2)**0.5
+				return (c[0]+(c[1])/((lam*1e-3)**2-c[2])-c[3]*(lam*1e-3)**2)**0.5
+
 			else:
-				return (coeff[4]+(coeff[5])/((lam*1e-3)**2-coeff[6])-coeff[7]*(lam*1e-3)**2)**0.5
-		else:
+				n_o =  	(c[0]+(c[1])/((lam*1e-3)**2-c[2])-c[3]*(lam*1e-3)**2)**0.5
+				n_e = 	(c[4]+(c[5])/((lam*1e-3)**2-c[6])-c[7]*(lam*1e-3)**2)**0.5
+				if self.orientation is "up":
+					return n_ext_effective(no=n_o,ne=n_e,self.cutangle-ray.angles[0])
+
+				elif self.orientation is "down":
+					return n_ext_effective(no=n_o,ne=n_e,self.cutangle+ray.angles[0])
+
+		elif ray.polarization == "V":
 			if self.orientation in {"up","down"}:
-				return (coeff[0]+(coeff[1])/((lam*1e-3)**2-coeff[2])-coeff[3]*(lam*1e-3)**2)**0.5
+				return (c[0]+(c[1])/((lam*1e-3)**2-c[2])-c[3]*(lam*1e-3)**2)**0.5
 			else:
-				return (coeff[4]+(coeff[5])/((lam*1e-3)**2-coeff[6])-coeff[7]*(lam*1e-3)**2)**0.5
+				n_o =  	(c[0]+(c[1])/((lam*1e-3)**2-c[2])-c[3]*(lam*1e-3)**2)**0.5
+				n_e = 	(c[4]+(c[5])/((lam*1e-3)**2-c[6])-c[7]*(lam*1e-3)**2)**0.5
+				if self.orientation is "left":
+					return n_ext_effective(no=n_o,ne=n_e,self.cutangle-ray.angles[1])
+
+				elif self.orientation is "right":
+					return n_ext_effective(no=n_o,ne=n_e,self.cutangle+ray.angles[1])
 	
 	def getdn(self,ray):
 
-		if !isinstance(ray,Ray):
+		if not isinstance(ray,Ray):
 			raise Exception("Please provide me with a ray to calculate the refractive index for!")
 		
-		c=self.selm_coeff(self.material)
+		c=self.selm_coeff[self.material]
 		lam=ray.wavelength
 		if ray.polarization == "H":
 			if self.orientation in {"left","right"}:
 				x=sp.Symbol('x')
-				ydiff=sp.diff((coeff[0]+(coeff[1])/((x*1e-3)**2-coeff[2])-coeff[3]*(x*1e-3)**2)**0.5,x)
+				ydiff=sp.diff((c[0]+(c[1])/((x*1e-3)**2-c[2])-c[3]*(x*1e-3)**2)**0.5,x)
 				f = sp.lambdify(x,ydiff,'numpy')
 				return f(lam)
 			else:
 				x=sp.Symbol('x')
-				ydiff=sp.diff((coeff[4]+(coeff[5])/((x*1e-3)**2-coeff[6])-coeff[7]*(x*1e-3)**2)**0.5,x)
+				ydiff=sp.diff((c[4]+(c[5])/((x*1e-3)**2-c[6])-c[7]*(x*1e-3)**2)**0.5,x)
 				f = sp.lambdify(x,ydiff,'numpy')
 				return f(lam)
 		else:
 			if self.orientation in {"up","down"}:
 				x=sp.Symbol('x')
-				ydiff=sp.diff((coeff[0]+(coeff[1])/((x*1e-3)**2-coeff[2])-coeff[3]*(x*1e-3)**2)**0.5,x)
+				ydiff=sp.diff((c[0]+(c[1])/((x*1e-3)**2-c[2])-c[3]*(x*1e-3)**2)**0.5,x)
 				f = sp.lambdify(x,ydiff,'numpy')
 				return f(lam)
 			else:
 				x=sp.Symbol('x')
-				ydiff=sp.diff((coeff[4]+(coeff[5])/((x*1e-3)**2-coeff[6])-coeff[7]*(x*1e-3)**2)**0.5,x)
+				ydiff=sp.diff((c[4]+(c[5])/((x*1e-3)**2-c[6])-c[7]*(x*1e-3)**2)**0.5,x)
 				f = sp.lambdify(x,ydiff,'numpy')
 				return f(lam)
 
-
-	def DSellmeier(coeff=[0,0,0,0],lam = 785):
-	x = sp.Symbol('x')
-	ydiff = sp.diff(Sellmeier(coeff,x),x)
-	f = sp.lambdify(x, ydiff, 'numpy')
-	
-	return f(lam)
 
 class Lens(Optic):
 	"All instances of this class (Child of optics) are objects that are curved surfaces (spherical) that act on the photons. One can have two different Radii of Curvature, so this field should be a vector"
@@ -215,7 +223,7 @@ class Lens(Optic):
 
 	def getn(self,ray):
 		
-		if !isinstance(ray,Ray):
+		if not isinstance(ray,Ray):
 			raise Exception("Please provide me with a ray to calculate the refractive index for!")
 		
 		c=self.selm_coeff[self.material]
@@ -225,7 +233,7 @@ class Lens(Optic):
 
 	def getdn(self,ray):
 		
-		if !isinstance(ray,Ray):
+		if not isinstance(ray,Ray):
 			raise Exception("Please provide me with a ray to calculate the refractive index for!")
 		
 		c=self.selm_coeff[self.material]
