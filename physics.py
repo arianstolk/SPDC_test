@@ -25,9 +25,9 @@ def DSellmeier(coeff=[0,0,0,0],lam = 785):
 	
 	return f(lam)
 
-def n_ext_effective(no=1,ne=1,theta=0):
+def n_ext_effective(coef=[0,0,0,0,0,0,0,0],theta=0,lab=785):
 
-	return ((np.sin(theta)/ne)**2+(np.cos(theta)/no)**2)**(-0.5)
+	return ((np.sin(theta)/(c[4]+(c[5])/((lam*1e-3)**2-c[6])-c[7]*(lam*1e-3)**2)**0.5)**2+(np.cos(theta)/(c[0]+(c[1])/((lam*1e-3)**2-c[2])-c[3]*(lam*1e-3)**2)**0.5)**2)**(-0.5)
 
 def walkoff(cutangle=0,coeff=[0,0,0,0,0,0,0,0],lam=785,thickness=1):
 

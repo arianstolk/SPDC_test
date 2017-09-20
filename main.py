@@ -12,6 +12,14 @@ import sympy as sp
 import matplotlib
 from vpython import *
 
+################################################################################################################
+
+def n_ext_effective(coeff=[0,0,0,0,0,0,0,0],theta=0,lam=785):
+	c=coeff
+	return ((np.sin(theta)/(c[4]+(c[5])/((lam*1e-3)**2-c[6])-(c[7])*(lam*1e-3)**2)**0.5)**2+(np.cos(theta)/(c[0]+(c[1])/((lam*1e-3)**2-c[2])-(c[3])*(lam*1e-3)**2)**0.5)**2)**(-0.5)
+	
+##################################################################################################################
+
 class ExpSetup(object):
 	"All instances of this class are a set of Optic elements along the z-direction. This class will handle all the preparation of the Optic elements to make them ready for the sequential ray tracing"
 
@@ -50,8 +58,6 @@ class ExpSetup(object):
 			boxes.append(box(pos=vec(0-centre[0],0-centre[1],elem.position[2]-centre[2]),size=vec(2,2,elem.thickness),opacity=0.3,color=elem.get_colour()))
 		return boxes 
 	
-
-
 
 class Ray(object):
 	"All instances of this class are monochromatic rays of light, resembling individual photons"
@@ -146,63 +152,76 @@ class Crystal(Optic):
 			raise Exception("Please provide me with a ray to calculate the refractive index for!")
 		
 		c=self.selm_coeff[self.material]
-		lam=ray.wavelength
+		lamb=ray.wavelength
 
 		if ray.polarization == "H":
 			if self.orientation in {"left","right"}:
-				return (c[0]+(c[1])/((lam*1e-3)**2-c[2])-c[3]*(lam*1e-3)**2)**0.5
+				return (c[0]+(c[1])/((lamb*1e-3)**2-c[2])-c[3]*(lamb*1e-3)**2)**0.5
 
 			else:
-				n_o =  	(c[0]+(c[1])/((lam*1e-3)**2-c[2])-c[3]*(lam*1e-3)**2)**0.5
-				n_e = 	(c[4]+(c[5])/((lam*1e-3)**2-c[6])-c[7]*(lam*1e-3)**2)**0.5
 				if self.orientation is "up":
-					return n_ext_effective(no=n_o,ne=n_e,self.cutangle-ray.angles[0])
+					return n_ext_effective(coeff = c,theta=self.cutangle-ray.angles[0],lam=lamb)
 
 				elif self.orientation is "down":
-					return n_ext_effective(no=n_o,ne=n_e,self.cutangle+ray.angles[0])
+					return n_ext_effective(coeff = c,theta = self.cutangle+ray.angles[0],lam=lamb)
 
 		elif ray.polarization == "V":
 			if self.orientation in {"up","down"}:
-				return (c[0]+(c[1])/((lam*1e-3)**2-c[2])-c[3]*(lam*1e-3)**2)**0.5
+				return (c[0]+(c[1])/((lamb*1e-3)**2-c[2])-c[3]*(lamb*1e-3)**2)**0.5
 			else:
-				n_o =  	(c[0]+(c[1])/((lam*1e-3)**2-c[2])-c[3]*(lam*1e-3)**2)**0.5
-				n_e = 	(c[4]+(c[5])/((lam*1e-3)**2-c[6])-c[7]*(lam*1e-3)**2)**0.5
 				if self.orientation is "left":
-					return n_ext_effective(no=n_o,ne=n_e,self.cutangle-ray.angles[1])
+					return n_ext_effective(coeff = c,theta = self.cutangle-ray.angles[1],lam=lamb)
 
 				elif self.orientation is "right":
-					return n_ext_effective(no=n_o,ne=n_e,self.cutangle+ray.angles[1])
+					return n_ext_effective(coeff = c,theta = self.cutangle+ray.angles[1],lam=lamb)
 	
 	def getdn(self,ray):
 
 		if not isinstance(ray,Ray):
 			raise Exception("Please provide me with a ray to calculate the refractive index for!")
-		
+					
 		c=self.selm_coeff[self.material]
-		lam=ray.wavelength
+		lamb=ray.wavelength
+
 		if ray.polarization == "H":
 			if self.orientation in {"left","right"}:
 				x=sp.Symbol('x')
 				ydiff=sp.diff((c[0]+(c[1])/((x*1e-3)**2-c[2])-c[3]*(x*1e-3)**2)**0.5,x)
-				f = sp.lambdify(x,ydiff,'numpy')
-				return f(lam)
+				f = sp.lambdbify(x,ydiff,'numpy')
+				return f(lamb)
+				
 			else:
-				x=sp.Symbol('x')
-				ydiff=sp.diff((c[4]+(c[5])/((x*1e-3)**2-c[6])-c[7]*(x*1e-3)**2)**0.5,x)
-				f = sp.lambdify(x,ydiff,'numpy')
-				return f(lam)
-		else:
+				if self.orientation is "up":
+					x=sp.Symbol('x')
+					ydiff=sp.diff(n_ext_effective(coeff=c,theta=self.cutangle-ray.angles[0],lam=x))
+					f = sp.lambdify(x,ydiff,'numpy')
+					return f(lamb)
+
+				elif self.oribentation is "down":
+					x=sp.Symbol('x')
+					ydiff=sp.diff(n_ext_effective(coeff=c,theta=self.cutangle+ray.angles[0],lam=x))
+					f = sp.lambdify(x,ydiff,'numpy')
+					return f(lamb)
+	
+		elif ray.polarization == "V":
 			if self.orientation in {"up","down"}:
 				x=sp.Symbol('x')
 				ydiff=sp.diff((c[0]+(c[1])/((x*1e-3)**2-c[2])-c[3]*(x*1e-3)**2)**0.5,x)
 				f = sp.lambdify(x,ydiff,'numpy')
-				return f(lam)
+				return f(lamb)
+				
 			else:
-				x=sp.Symbol('x')
-				ydiff=sp.diff((c[4]+(c[5])/((x*1e-3)**2-c[6])-c[7]*(x*1e-3)**2)**0.5,x)
-				f = sp.lambdify(x,ydiff,'numpy')
-				return f(lam)
+				if self.orientation is "left":
+					x=sp.Symbol('x')
+					ydiff=sp.diff(n_ext_effective(coeff=c,theta=self.cutangle-ray.angles[1],lam=x))
+					f = sp.lambdify(x,ydiff,'numpy')
+					return f(lamb)
 
+				elif self.orientation is "right":
+					x=sp.Symbol('x')
+					ydiff=sp.diff(n_ext_effective(coeff=c,theta=self.cutangle+ray.angles[1],lam=x))
+					f = sp.lambdify(x,ydiff,'numpy')
+					return f(lamb)
 
 class Lens(Optic):
 	"All instances of this class (Child of optics) are objects that are curved surfaces (spherical) that act on the photons. One can have two different Radii of Curvature, so this field should be a vector"
@@ -242,7 +261,6 @@ class Lens(Optic):
 		ydiff=sp.diff((1+(c[0]*(x*1e-3)**2)/(c[1]-(x*1e-3)**2)+(c[2]*(x*1e-3)**2)/(c[3]-(x*1e-3)**2)+(c[4]*(x*1e-3)**2)/(c[5]-(x*1e-3)**2))**(0.5),x)
 		f = sp.lambdify(x,ydiff,'numpy')
 		return f(lam)
-
 
 
 
