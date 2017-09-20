@@ -43,10 +43,10 @@ class ExpSetup(object):
 				self.elements.insert(0,Optic(name="Air_Begin",material="Air",position=[0,0,(self.elements[0].fsurf)/2],thickness=self.elements[0].fsurf))
 			self.elements.append(Optic(name="Air_End",material="Air",position=[0,0,self.elements[-1].bsurf+2.5],thickness=5))
 	
-	def visualize(self):
+	def visualize(self,centre = [0,0,0]):
 		boxes=[]
 		for elem in self.elements:
-			boxes.append(box(pos=vec(0,0,elem.position[2]),size=vec(2,2,elem.thickness),opacity=0.3,color=elem.get_colour()))
+			boxes.append(box(pos=vec(0-centre[0],0-centre[1],elem.position[2]-centre[2]),size=vec(2,2,elem.thickness),opacity=0.3,color=elem.get_colour()))
 		return boxes 
 	
 
@@ -71,11 +71,11 @@ class Ray(object):
 
 class Optic(object):
 	"All instances of this class used to build a virtual setup that resembles the SPDC source that do NOT EMIT photons, but only act on them. E.G. non-linear crystals/lenses/HWP etc."
+	
 	def __repr__(self):
 		return "Optic_{}".format(self.name)
 
 	def __init__(self,**k):
-		"""Name is not purely cosmetic, it has to follow these rules:"""
 		try:
 			self.name 		=  k.pop('name');
 			self.material	=  k.pop('material')
@@ -102,11 +102,34 @@ class Optic(object):
 
 		return colour
 
-	####NEED TO ADD VISUALIZATION TOOLS###
+	def getn(self,ray):
+		if !isinstance(ray,Ray):
+			raise Exception("Please provide me with a ray to calculate the refractive index for!")
+
+		lam=ray.wavelength
+
+		return 1+(0.05792105)/(238-(lam*1e-3)**-2)+(0.00167917)/(57.362-(lam*1e-3)**-2)
+
+	def getdn(self,ray):
+
+		if !isinstance(ray,Ray):
+			raise Exception("Please provide me with a ray to calculate the refractive index for!")
+
+		lam=ray.wavelength
+
+		return -(3358.34)/(((57.362-(1e6)/lam**2)**2)*lam**3)-(115842)/(((238-(1e6)/lam**2)**2)*lam**3)
+
+
 
 
 class Crystal(Optic):
 	"All instances of this class (child of Optics), are objects that are (non-linear) crystals that act on the photons. They are all rectangular boxes that are made of a birefringent material"
+	
+	materials 	=	["BBO","YVO4"]
+
+	selm_coeff 	= {	"BBO" 		: 	[2.7359, 0.01878, 0.01822, 0.01354, 2.3753, 0.01224, 0.01667, 0.01516],
+ 					"YVO4" 		: 	[3.77834, 0.069736, 0.04724, 0.0108133, 4.59905, 0.110534, 0.04813, 0.0122676]
+ 				}
 
 	def __init__(self,**k):
 		try:
@@ -116,8 +139,71 @@ class Crystal(Optic):
 			print("Please provide at least orientation and cutangle to initiate a Crystal object")
 		super(Crystal,self).__init__(**k)
 
+	def getn(self,ray):
+
+		if !isinstance(ray,Ray):
+			raise Exception("Please provide me with a ray to calculate the refractive index for!")
+		
+		c=self.selm_coeff(self.material)
+		lam=ray.wavelength
+
+		if ray.polarization == "H":
+			if self.orientation in {"left","right"}:
+				return (coeff[0]+(coeff[1])/((lam*1e-3)**2-coeff[2])-coeff[3]*(lam*1e-3)**2)**0.5
+			else:
+				return (coeff[4]+(coeff[5])/((lam*1e-3)**2-coeff[6])-coeff[7]*(lam*1e-3)**2)**0.5
+		else:
+			if self.orientation in {"up","down"}:
+				return (coeff[0]+(coeff[1])/((lam*1e-3)**2-coeff[2])-coeff[3]*(lam*1e-3)**2)**0.5
+			else:
+				return (coeff[4]+(coeff[5])/((lam*1e-3)**2-coeff[6])-coeff[7]*(lam*1e-3)**2)**0.5
+	
+	def getdn(self,ray):
+
+		if !isinstance(ray,Ray):
+			raise Exception("Please provide me with a ray to calculate the refractive index for!")
+		
+		c=self.selm_coeff(self.material)
+		lam=ray.wavelength
+		if ray.polarization == "H":
+			if self.orientation in {"left","right"}:
+				x=sp.Symbol('x')
+				ydiff=sp.diff((coeff[0]+(coeff[1])/((x*1e-3)**2-coeff[2])-coeff[3]*(x*1e-3)**2)**0.5,x)
+				f = sp.lambdify(x,ydiff,'numpy')
+				return f(lam)
+			else:
+				x=sp.Symbol('x')
+				ydiff=sp.diff((coeff[4]+(coeff[5])/((x*1e-3)**2-coeff[6])-coeff[7]*(x*1e-3)**2)**0.5,x)
+				f = sp.lambdify(x,ydiff,'numpy')
+				return f(lam)
+		else:
+			if self.orientation in {"up","down"}:
+				x=sp.Symbol('x')
+				ydiff=sp.diff((coeff[0]+(coeff[1])/((x*1e-3)**2-coeff[2])-coeff[3]*(x*1e-3)**2)**0.5,x)
+				f = sp.lambdify(x,ydiff,'numpy')
+				return f(lam)
+			else:
+				x=sp.Symbol('x')
+				ydiff=sp.diff((coeff[4]+(coeff[5])/((x*1e-3)**2-coeff[6])-coeff[7]*(x*1e-3)**2)**0.5,x)
+				f = sp.lambdify(x,ydiff,'numpy')
+				return f(lam)
+
+
+	def DSellmeier(coeff=[0,0,0,0],lam = 785):
+	x = sp.Symbol('x')
+	ydiff = sp.diff(Sellmeier(coeff,x),x)
+	f = sp.lambdify(x, ydiff, 'numpy')
+	
+	return f(lam)
+
 class Lens(Optic):
 	"All instances of this class (Child of optics) are objects that are curved surfaces (spherical) that act on the photons. One can have two different Radii of Curvature, so this field should be a vector"
+	
+	materials 	= ["N-SF6HT","N-LAK22"]
+
+	selm_coeff 	= {	"N-SF6HT" 	:	[1.77931763, 0.0133714182, 0.338149866, 0.0617533621, 2.08734474, 174.01759],
+					"N-LAK22" 	:	[1.14229781, 0.00585778594, 0.535138441, 0.0198546147, 1.04088385, 100.834017]
+ 					}
 
 	def __init__(self,**k):
 		try:
@@ -126,3 +212,30 @@ class Lens(Optic):
 		except KeyError:
 			print("Please provide at least ROC (Radii of Curvature) and centre position to initiate a Lens object")
 		super(Lens,self),__init__(**k)
+
+	def getn(self,ray):
+		
+		if !isinstance(ray,Ray):
+			raise Exception("Please provide me with a ray to calculate the refractive index for!")
+		
+		c=self.selm_coeff[self.material]
+		lam=ray.wavelength
+
+		return (1+(c[0]*(lam*1e-3)**2)/(c[1]-(lam*1e-3)**2)+(c[2]*(lam*1e-3)**2)/(c[3]-(lam*1e-3)**2)+(c[4]*(lam*1e-3)**2)/(c[5]-(lam*1e-3)**2))**(0.5)
+
+	def getdn(self,ray):
+		
+		if !isinstance(ray,Ray):
+			raise Exception("Please provide me with a ray to calculate the refractive index for!")
+		
+		c=self.selm_coeff[self.material]
+		lam=ray.wavelength
+		x=sp.Symbol('x')
+		ydiff=sp.diff((1+(c[0]*(x*1e-3)**2)/(c[1]-(x*1e-3)**2)+(c[2]*(x*1e-3)**2)/(c[3]-(x*1e-3)**2)+(c[4]*(x*1e-3)**2)/(c[5]-(x*1e-3)**2))**(0.5),x)
+		f = sp.lambdify(x,ydiff,'numpy')
+		return f(lam)
+
+
+
+
+
