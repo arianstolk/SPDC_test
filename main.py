@@ -17,7 +17,7 @@ from vpython import *
 def n_ext_effective(coeff=[0,0,0,0,0,0,0,0],theta=0,lam=785):
 	c=coeff
 	return ((np.sin(theta)/(c[4]+(c[5])/((lam*1e-3)**2-c[6])-(c[7])*(lam*1e-3)**2)**0.5)**2+(np.cos(theta)/(c[0]+(c[1])/((lam*1e-3)**2-c[2])-(c[3])*(lam*1e-3)**2)**0.5)**2)**(-0.5)
-	
+
 ##################################################################################################################
 
 class ExpSetup(object):
@@ -238,7 +238,7 @@ class Lens(Optic):
 			self.centre = k.pop('centre')
 		except KeyError:
 			print("Please provide at least ROC (Radii of Curvature) and centre position to initiate a Lens object")
-		super(Lens,self),__init__(**k)
+		super(Lens,self).__init__(**k)
 
 	def getn(self,ray):
 		
@@ -262,6 +262,30 @@ class Lens(Optic):
 		f = sp.lambdify(x,ydiff,'numpy')
 		return f(lam)
 
+class HWP(Optic):
+	"All instances of this class (Child of optics) are objects that perform the mathematical operation of H->V and V->H for a certain wavelenth range"
+
+	def __init__(self,**k):
+		try:
+			self.cutoff=k.pop('cutoff')
+		except KeyError:
+			print("Please provide the cutoff wavelenght in nm for the HWP")
+
+		super(HWP,self).__init__(**k)
+
+	def show_cutoff(self):
+		print("I act on a waveplate for photons with wavelength above {}nm".format(self.cutofff))
+
+	def propagate(self,ray):
+		if not isinstance(ray,Ray):
+			raise Exception("Please provide me with a ray to act on!")
+
+		if ray.wavelength > self.cutoff:
+			if ray.polarization = "H":
+				ray.polarization = "V"
+			else:
+				ray.polarization = "H"
+		
 
 
 
