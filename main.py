@@ -12,20 +12,67 @@ import sympy as sp
 import matplotlib
 from vpython import *
 
+debug=True
+
 ################################################################################################################
+def Sellmeier(coeff=[0,0,0,0],lam = 785):
+	
+	return (coeff[0]+(coeff[1])/((lam*1e-3)**2-coeff[2])-coeff[3]*(lam*1e-3)**2)**0.5
 
 def n_ext_effective(coeff=[0,0,0,0,0,0,0,0],theta=0,lam=785):
 	c=coeff
 	return ((np.sin(theta)/(c[4]+(c[5])/((lam*1e-3)**2-c[6])-(c[7])*(lam*1e-3)**2)**0.5)**2+(np.cos(theta)/(c[0]+(c[1])/((lam*1e-3)**2-c[2])-(c[3])*(lam*1e-3)**2)**0.5)**2)**(-0.5)
 
+def walkoff(theta=0,coeff=[0,0,0,0,0,0,0,0],lam=785,thickness=1):
+
+	if len(coeff)<8:
+		print("Please provide all 8 Sellmeier coeffs")
+	else:
+		n_ord=Sellmeier(coeff[0:4],lam)
+		n_ext=Sellmeier(coeff[4:8],lam)
+		return 0.5*thickness*(n_ext_effective(coeff=coeff,theta=theta,lam=lam)**2)*((n_ord**-2)-(n_ext**-2))*np.sin(2*theta)
 ##################################################################################################################
+class Simulation(object):
+	"This class describes the interaction of Ray and ExpSetup, where the Rays are traced through the setup using the methods described in this class"
+
+	def __init__(self,debug=debug,**k):
+		try:
+			self.setup=k.pop('setup')
+			self.rays=k.pop('rays')
+			self.numrays=len(self.rays)
+			self.numobj=self.setup.nr_elements
+			self.num_interfaces=len(self.setup.grouped_elements)
+		except KeyError:
+			print("Please provide rays and setup to start the simulation")
+
+	def refract(ray,optic_elements=[]):
+		element1=optic_elements[0]
+		element2=optic_elements[1]
+		nin=element1.getn(ray)
+		nout=element2.getn(ray)
+
+		if not nin == nout:
+			if hassatr(element1,ROC):
+				pos=norm(ray.position[0:2]-element1.position[0:2])
+				ray.angles =  [np.arcsin(np.sin(x)(nin/nout))+pos*(nin-nout)/(nout*element1.ROC[1]) for x in ray.angles]
+			elif hassattr(element2,ROC):
+				pos=norm(ray.position[0:2]-element2.position[0:2])
+				ray.angles =  [np.arcsin(np.sin(x)(nin/nout))+pos*(nin-nout)/(nout*element1.ROC[0]) for x in ray.angles]
+			else:
+				ray.angles = [p.arcsin(np.sin(x)(nin/nout)) for x in ray.angles]
+
+	def translate(ray,optic_element=[]):
+		optic_element.translate(ray)
+
 
 class ExpSetup(object):
 	"All instances of this class are a set of Optic elements along the z-direction. This class will handle all the preparation of the Optic elements to make them ready for the sequential ray tracing"
 
-	def __init__(self, optic_elements=[]):
-		self.elements = optic_elements
-		self.nr_elements = len(optic_elements)
+	def __init__(self,*args):
+		if len(args)==0:
+			raise Exception("Please provide the optical elements for the setup")
+		self.elements = list(args)
+		self.nr_elements = len(self.elements)
 
 	def __repr__(self):
 		return "Experimental Setup"
@@ -57,6 +104,11 @@ class ExpSetup(object):
 		for elem in self.elements:
 			boxes.append(box(pos=vec(0-centre[0],0-centre[1],elem.position[2]-centre[2]),size=vec(2,2,elem.thickness),opacity=0.3,color=elem.get_colour()))
 		return boxes 
+
+	def group(self):
+		lis=self.elements
+		self.grouped_elements = [[lis[i],lis[i+1]] for i in range(0,len(lis)-1,1)]
+
 	
 
 class Ray(object):
@@ -85,7 +137,7 @@ class Optic(object):
 	def __init__(self,**k):
 		try:
 			self.name 		=  k.pop('name');
-			self.material	=  k.pop('material')
+			self.material	=  k.pop('material',None)
 			self.position	=  k.pop('position')
 			self.thickness 	=  k.pop('thickness',0)
 			self.fsurf 		= self.position[2] - 0.5*self.thickness
@@ -125,6 +177,9 @@ class Optic(object):
 		lam=ray.wavelength
 
 		return -(3358.34)/(((57.362-(1e6)/lam**2)**2)*lam**3)-(115842)/(((238-(1e6)/lam**2)**2)*lam**3)
+
+	def translate(self,ray):
+		ray.position+= [np.tan(ray.angles[0])*(self.thickness-(ray.position[2]-self.fsurf)),np.tan(ray.angles[1])*(self.thickness-(ray.position[2]-self.fsurf)),(self.thickness-(ray.position[2]-self.fsurf))]
 
 
 
@@ -223,6 +278,40 @@ class Crystal(Optic):
 					f = sp.lambdify(x,ydiff,'numpy')
 					return f(lamb)
 
+	def getwalkoff(self,ray):
+
+		if not isinstance(ray,Ray):
+			raise Exception("Please provide me with a ray to calculate the walkoff for!")
+
+		c=self.selm_coeff[self.material]
+
+		if ray.polarization == "H":
+			if self.orientation == "up":
+				w =  walkoff(theta=self.cutangle-ray.angles[0],coeff=c,lam=ray.wavelength,thickness=self.thickness-(ray.position[2]-self.fsurf))
+				return [w,0,0]
+			elif self.orientation == "down":
+				w =  -1*walkoff(theta=self.cutangle+ray.angles[0],coeff=c,lam=ray.wavelength,thickness=self.thickness-(ray.position[2]-self.fsurf))
+				return [w,0,0]
+			else:
+				w = 0
+				return [w,0,0]
+		elif ray.polarization == "V":
+			if self.orientation == "left":
+				w =  walkoff(theta=self.cutangle-ray.angles[1],coeff=c,lam=ray.wavelength,thickness=self.thickness-(ray.position[2]-self.fsurf))
+				return [0,w,0]
+			elif self.orientation == "right":
+				w = -1*walkoff(theta=self.cutangle+ray.angles[1],coeff=c,lam=ray.wavelength,thickness=self.thickness-(ray.position[2]-self.fsurf))
+				return [0,w,0]
+			else:
+				w = 0
+				return [w,0,0]
+
+	def translate(self,ray):
+		walkoff=self.gewalkoff(ray)
+		ray.position+= walkoff + [np.tan(ray.angles[0])*(self.thickness-(ray.position[2]-self.fsurf)),np.tan(ray.angles[1])*(self.thickness-(ray.position[2]-self.fsurf)),(self.thickness-(ray.position[2]-self.fsurf))]
+
+
+
 class Lens(Optic):
 	"All instances of this class (Child of optics) are objects that are curved surfaces (spherical) that act on the photons. One can have two different Radii of Curvature, so this field should be a vector"
 	
@@ -262,6 +351,10 @@ class Lens(Optic):
 		f = sp.lambdify(x,ydiff,'numpy')
 		return f(lam)
 
+	def translate(self,ray):
+		ray.position+= [np.tan(ray.angles[0])*(self.thickness-(ray.position[2]-self.fsurf)),np.tan(ray.angles[1])*(self.thickness-(ray.position[2]-self.fsurf)),(self.thickness-(ray.position[2]-self.fsurf))]
+
+
 class HWP(Optic):
 	"All instances of this class (Child of optics) are objects that perform the mathematical operation of H->V and V->H for a certain wavelenth range"
 
@@ -285,6 +378,10 @@ class HWP(Optic):
 				ray.polarization = "V"
 			else:
 				ray.polarization = "H"
+
+	def translate(self,ray):
+		ray.position+= [np.tan(ray.angles[0])*(self.thickness-(ray.position[2]-self.fsurf)),np.tan(ray.angles[1])*(self.thickness-(ray.position[2]-self.fsurf)),(self.thickness-(ray.position[2]-self.fsurf))]
+
 
 
 
