@@ -14,6 +14,7 @@ import math
 from scipy import interpolate
 import numpy as np
 from sklearn.preprocessing import normalize
+import random
 
 import matplotlib.cm as cm
 import matplotlib.mlab as mlab
@@ -98,7 +99,7 @@ def phasefunction(lpump=405,l_range=785,theta_range=0,coeff=[2.7359, 0.01878, 0.
 	wsmesh,theta_omesh=np.meshgrid(ws,theta_o)
 	wimesh,theta_omesh=np.meshgrid(wi,theta_o)
 
-	thet_s=np.arcsin(np.sin(theta_omesh)*nairs/nos)
+	thet_s=theta_omesh
 	thet_i=np.arcsin(nos*wsmesh*np.sin(thet_s)/(noi*wimesh))
 	dkz=npeff*wp-nos*wsmesh*np.cos(thet_s)-noi*wimesh*np.cos(thet_i)
 	dky=-nos*wsmesh*np.sin(thet_s)+noi*wimesh*np.sin(thet_i)
@@ -157,13 +158,11 @@ def phasefunction_vec(lpump=405,l_list=[785],theta_list=[0],coeff=[2.7359, 0.018
 	noi = Sellmeier(coeff=c[0:4],lam=li)
 	nei = Sellmeier(coeff=c[4:8],lam=li)
 
-	nairs = 1+(0.05792105)/(238-(ls*1e-3)**-2)+(0.00167917)/(57.362-(ls*1e-3)**-2)
-	thet_cut=cutangle
-	npeff=np.sqrt(1/((np.cos(thet_cut)/nop)**2+(np.sin(thet_cut)/nep)**2))
+	npeff=np.sqrt(1/((np.cos(cutangle)/nop)**2+(np.sin(cutangle)/nep)**2))
 	L=crystal_length
 	W=0.1
 
-	thet_s=np.arcsin(np.sin(theta_o)*nairs/nos)
+	thet_s=theta_o
 	thet_i=np.arcsin(nos*ws*np.sin(thet_s)/(noi*wi))
 	dkz=npeff*wp-nos*ws*np.cos(thet_s)-noi*wi*np.cos(thet_i)
 	dky=-nos*ws*np.sin(thet_s)+noi*wi*np.sin(thet_i)
@@ -185,6 +184,108 @@ def get_N_from_phasefunc(N=1,factor=1e-3,lpump=405,l_min=785,l_max=900,theta_min
 	doubles = np.array([randN_l,randN_theta]).T
 
 	return doubles[np.where(weight>rand_check)]
+
+
+
+def get_SPDC_rayset_adv(self,N=1,nr_crystals=1,pumpray=[],pump_waist=[0,0],pump_focus=[0,0],cutangle=28.76*np.pi/180,l_min=0,l_max=0,theta_min=0,theta_max=0,factor=1e-2):
+	
+	ray_list = []
+	lpump=pumpray.wavelength
+
+	rand_u = np.random.uniform(0,1,N)
+	rand_uPhase = np.random.uniform(0,1,N)
+
+	randN_l		= np.random.uniform(l_min,lpump/2,N)
+	randN_theta	= np.random.uniform(theta_min,theta_max,N)*np.pi/180
+	rand_check	= np.random.uniform(0,1,N)
+
+	w0x=pump_waist[0]
+	w0y=pump_waist[1]
+
+	zR_pump_x=(np.pi*w0x**2)/(lpump*1e-6)
+	zR_pump_y=(np.pi*w0y**2)/(lpump*1e-6)
+
+
+	for i in range(nr_crystals):
+		
+		crystal=self.setup.crystals[i]
+		pumpray.position = np.array([pumpray.position[0],pumpray.position[1],crystal.fsurf])
+		w_beg=pumpray.position
+		w_end=w_beg+crystal.getwalkoff(pumpray)+np.array([0,0,crystal.thickness])
+		pumpray.position += crystal.getwalkoff(pumpray)
+
+		start_pos = np.repeat(np.array([w_beg]),N,axis=0) + np.outer(rand_u,(w_beg - w_end))
+		
+		start_z = (start_pos.T)[2]
+
+		"Introduce effects of gaussian pump"
+		
+		wzx,wzy = w0x*np.sqrt(1+((start_z-pump_focus[0])/zR_pump_x)**2),w0y*np.sqrt(1+((start_z-pump_focus[1])/zR_pump_y)**2)
+
+		sx,sy=wzx/sqrt(2),wzy/sqrt(2)
+	
+		gauss_x=np.random.normal(np.zeros((1,N)),sx)
+		gauss_y=np.random.normal(np.zeros((1,N)),sy)
+
+		gauss_xy=np.concatenate((gauss_x,gauss_y)).T
+
+		start_angles_gauss=np.concatenate((-np.arcsin(gauss_x/(start_z-pump_focus[0]+((zR_pump_x)**2)/(start_z-pump_focus[0]))),-np.arcsin(gauss_y/(start_z-pump_focus[1]+((zR_pump_y)**2)/(start_z-pump_focus[1]))))).T
+
+		#"Sampling the phasefunction for the N randomly generated angles. the weight will later be used to accept or reject samples"
+		weight=factor*phasefunction_vec(l_list=randN_l,theta_list=randN_theta,lpump=lpump,cutangle=cutangle-(start_angles_gauss.T)[0])
+
+		#"Select the samples that will be used for signal/idler generation"
+		gauss_pad=np.zeros(start_pos.shape)
+		gauss_pad[:gauss_xy.shape[0],:gauss_xy.shape[1]]=gauss_xy
+
+		sampled_params=np.concatenate((start_pos+gauss_pad,start_angles_gauss,np.array([randN_l]).T,np.array([randN_theta]).T),axis=1)#list of important simulation parameters
+
+		final_params=sampled_params[np.where(weight>rand_check)]#filters the params for the succesfully drawn samples
+		Nsuc=len(final_params)
+
+		[ray_start,ray_angle,ls,opening_angle]=[final_params[:,0:3].T,final_params[:,3:5].T,final_params[:,5:6].T,final_params[:,6:7].T]
+
+		rand_nr = np.random.uniform(0,1,len(final_params))
+		li = ls*(lpump)/(ls-lpump)
+		
+
+		azim=np.cos(rand_nr*np.pi)*opening_angle
+		horiz=np.sign(azim)*np.sign(opening_angle)*np.sqrt(opening_angle**2 - azim**2)
+
+		prop_angles=np.concatenate((azim,horiz)).T
+		
+
+		"Assembling the final list of parameters, combining all the angular and spatial effects"
+
+		Srays=[ray_start,prop_angles+ray_angle.T,ls]
+		Irays=[ray_start,-prop_angles+ray_angle.T,li]
+	
+	print("jippie no errors,{},{}".format(len(ls.T),len(li.T)))
+
+
+def generate_N_rays(N=1,polarization="V",ls=[],theta_o=[],pos_beg=[0,0],pos_end=[1,1],pumpray=[]):
+
+	N = len(ls)
+	rand_pos = np.random.uniform(0,1,2*N)
+	li = ls*(pumpray.wavelength)/(ls-pumpray.wavelength)
+	wave_double=list(zip(li,ls))
+
+	li_max = [max(x) for x in wave_double]
+	ls_min = [min(x) for x in wave_double]
+
+	li=li_max
+	ls=ls_min
+
+	azim=np.cos(rand_pos[N-1:-1]*np.pi)*theta_o
+	horiz=np.sign(azim)*np.sign(theta_o)*np.sqrt(theta_o**2 - azim**2)
+
+	angle_list=np.array([azim,horiz]).T
+
+	return [[Ray(position=[pos_beg[0]+rand_pos[i-1]*(pos_end[0]-pos_beg[0]),pos_beg[1]+rand_pos[i-1]*(pos_end[1]-pos_beg[1]),pos_beg[2]+(pos_end[2]-pos_beg[2])*rand_pos[i-1]],name="Sig_ray_{}".format(i),angles=angle_list[i],wavelength=ls[i],polarization = polarization) for i in range(N)],
+			 [Ray(position=[pos_beg[0]+rand_pos[i-1]*(pos_end[0]-pos_beg[0]),pos_beg[1]+rand_pos[i-1]*(pos_end[1]-pos_beg[1]),pos_beg[2]+(pos_end[2]-pos_beg[2])*rand_pos[i-1]],name="Idl_ray_{}".format(i),angles=-1*angle_list[i],wavelength=li[i],polarization = polarization) for i in range(N)]]
+
+
+
 
 
 

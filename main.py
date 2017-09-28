@@ -8,9 +8,12 @@
 ###Import library####
 
 from math import *
+import random
 import numpy as np
 import sympy as sp
 import matplotlib
+import collections
+from itertools import compress
 
 import matplotlib.pyplot as plt
 import time, sys
@@ -38,6 +41,12 @@ def dn_ext_effective(coeff=[0,0,0,0,0,0,0,0],theta=0,lam=785):
 			+(((c[5]+c[7]*(c[6]-(1e-6)*lam**2)**2)*sin(theta)**2)/(c[5]+(c[6]-(1e-6)*lam**2)*(-c[4]+(1e-6)*c[3]*lam**2))**2))\
 			/((cos(theta)**2)/(c[0]-(1e-6)*c[3]*lam**2-c[1]/(c[2]-(1e-6)*lam**2))+(sin(theta)**2)/(c[4]-(1e-6)*c[7]*lam**2-c[5]/(c[6]-(1e-6)*lam**2)))**(3/2))
 
+def flatten(l):
+    for el in l:
+        if isinstance(el, collections.Iterable) and not isinstance(el, (str, bytes)):
+            yield from flatten(el)
+        else:
+            yield el
 
 def n_ext_effective(coeff=[0,0,0,0,0,0,0,0],theta=0,lam=785):
 	c=coeff
@@ -70,6 +79,39 @@ def update_progress(progress):
     text = "\rPercent: [{0}] {1}% {2}".format( "#"*block + "-"*(barLength-block), progress*100, status)
     sys.stdout.write(text)
     sys.stdout.flush()
+
+def phasefunction_vec(lpump=405,l_list=[785],theta_list=[0],coeff=[2.7359, 0.01878, 0.01822, 0.01354, 2.3753, 0.01224, 0.01667, 0.01516],cutangle=28.7991*np.pi/180,crystal_length=6):
+
+	c=coeff
+
+	lp=lpump
+	ls=l_list
+	li=ls*lp/(ls-lp);
+
+	theta_o=theta_list
+
+	wp,ws,wi = (2*np.pi)/lp,(2*np.pi)/ls,(2*np.pi)/li
+
+	nop = Sellmeier(coeff=c[0:4],lam=lp)
+	nep = Sellmeier(coeff=c[4:8],lam=lp)
+	nos = Sellmeier(coeff=c[0:4],lam=ls)
+	nes = Sellmeier(coeff=c[4:8],lam=ls)
+	noi = Sellmeier(coeff=c[0:4],lam=li)
+	nei = Sellmeier(coeff=c[4:8],lam=li)
+
+	
+	npeff=np.sqrt(1/((np.cos(cutangle)/nop)**2+(np.sin(cutangle)/nep)**2))
+	L=crystal_length
+	W=0.1
+
+	thet_s=theta_o
+	thet_i=np.arcsin(nos*ws*np.sin(thet_s)/(noi*wi))
+	dkz=npeff*wp-nos*ws*np.cos(thet_s)-noi*wi*np.cos(thet_i)
+	dky=-nos*ws*np.sin(thet_s)+noi*wi*np.sin(thet_i)
+	phi=np.exp(-((W*1e6)**2)*(dky**2)/2)*(np.sin(0.5*dkz*L*1e6)/(0.5*dkz*L*1e6))**2
+
+	return phi
+
 
 
 ##################################################################################################################
@@ -119,18 +161,39 @@ class Simulation(object):
 		# 	pool.map(self.complete_ray_propagation,self.rays)
 		# 	pool.close()
 		# 	pool.join()
+	def show_filtered(self,time_diff=False,bins=50):
 
-	def showtimes(self,time_diff=False):
+		if not time_diff:
+			timelist=[[x.arrivaltime()*(1e15) for x in raylist] for raylist in self.filtered_rays]
+		else:
+			arrivtimes =[(1e15)*np.array([x.arrivaltime() for x in raylist]) for raylist in self.filtered_rays]
+			timelist = [arrivtimes[0]-arrivtimes[1],arrivtimes[2]-arrivtimes[3]]
+		 
+		plt.figure()
+
+		
+		for times in timelist:
+			plt.hist(times,bins,alpha=0.5)
+			print(np.mean(times))
+		
+		plt.xlabel("arrival time with respect to earliest photon [fs]")
+		plt.ylabel("Occurance")
+		plt.show()
+
+
+	
+	def showtimes(self,time_diff=False,bins=50):
 		if not time_diff:
 			timelist=(1e15)*(np.array([[x.arrivaltime() for x in raylist] for raylist in self.rays]))
+
 		else:
-			arrivtimes = (1e15)*(np.array([[x.arrivaltime() for x in raylist] for raylist in self.rays]))
+			arrivtimes = ((1e15)*np.array([[x.arrivaltime() for x in raylist] for raylist in self.rays]))
 			timelist = np.array([arrivtimes[0]-arrivtimes[1],arrivtimes[2]-arrivtimes[3]])
 		
 		plt.figure()
 		
 		for times in timelist:
-			plt.hist(times,alpha=0.5)
+			plt.hist(times,bins,alpha=0.5)
 			print(np.mean(times),len(times))
 		
 		plt.xlabel("arrival time with respect to earliest photon [fs]")
@@ -144,14 +207,15 @@ class Simulation(object):
 		element2=optic_elements[1]
 		nin=element1.getn(ray)
 		nout=element2.getn(ray)
+		# print(nin,nout,ray.angles,ray.position,element1.position,element2.position)
 
 		if not nin == nout:
 			if hasattr(element1,"ROC"):
-				pos=((ray.position[0]-element1.position[0])**2+(ray.position[1]-element1.position[1])**2)**0.5
-				ray.angles =  [asin(sin(x)*(nin/nout))+pos*(nin-nout)/(nout*element1.ROC[1]) for x in ray.angles]
+				pos=ray.position-element1.position
+				ray.angles =  [asin(sin(x)*(nin/nout))+pos[i]*((nin-nout)/(nout*element1.ROC[1])) for i,x in enumerate(ray.angles)]
 			elif hasattr(element2,"ROC"):
-				pos=((ray.position[0]-element2.position[0])**2+(ray.position[1]-element2.position[1])**2)**0.5
-				ray.angles =  [asin(sin(x)*(nin/nout))+pos*(nin-nout)/(nout*element1.ROC[0]) for x in ray.angles]
+				pos=ray.position-element2.position
+				ray.angles =  [asin(sin(x)*(nin/nout))+pos[i]*((nin-nout)/(nout*element2.ROC[0])) for i,x in enumerate(ray.angles)]
 			else:
 				ray.angles = [asin(sin(x)*(nin/nout)) for x in ray.angles]
 
@@ -216,9 +280,99 @@ class Simulation(object):
 			for elements in grouped_elements:
 				Simulation.propagate(ray,elements)
 
-
-	def get_SPDC_rayset(self,N=1,nr_crystals=1,pumpray=[],ls=[],theta_o=[]):
+	def get_SPDC_rayset_adv(self,N=1,nr_crystals=1,pumpray=[],pump_waist=[0,0],pump_focus=[0,0],cutangle=28.8*np.pi/180,l_min=0,l_max=0,theta_min=0,theta_max=0,factor=1e-2):
 		
+		ray_list = []
+		lpump=pumpray.wavelength
+
+		rand_u = np.random.uniform(0,1,N)
+		rand_uPhase = np.random.uniform(0,1,N)
+
+		randN_l		= np.random.uniform(l_min,2*lpump,N)
+		randN_theta	= np.random.uniform(theta_min,theta_max,N)*np.pi/180
+		rand_check	= np.random.uniform(0,1,N)
+
+		w0x=pump_waist[0]
+		w0y=pump_waist[1]
+
+		zR_pump_x=(np.pi*w0x**2)/(lpump*1e-6)
+		zR_pump_y=(np.pi*w0y**2)/(lpump*1e-6)
+
+		lreturn_list=[]
+
+		for i in range(nr_crystals):
+			
+			crystal=self.setup.crystals[i]
+			pumpray.position = np.array([pumpray.position[0],pumpray.position[1],crystal.fsurf])
+			w_beg=pumpray.position
+			w_end=w_beg+crystal.getwalkoff(pumpray)+np.array([0,0,crystal.thickness])
+			pumpray.position += crystal.getwalkoff(pumpray)
+
+			start_pos = np.repeat(np.array([w_beg]),N,axis=0) + np.outer(rand_u,(w_end-w_beg))
+
+			
+			start_z = (start_pos.T)[2]
+
+			plt.figure()
+			plt.hist(start_z-pump_focus[0])
+			plt.show
+
+			"Introduce effects of gaussian pump"
+			
+			wzx,wzy = w0x*np.sqrt(1+((start_z-pump_focus[0])/zR_pump_x)**2),w0y*np.sqrt(1+((start_z-pump_focus[1])/zR_pump_y)**2)
+
+			sx,sy=wzx,wzy
+		
+			gauss_x=np.random.normal(np.zeros((1,N)),sx)
+			gauss_y=np.random.normal(np.zeros((1,N)),sy)
+
+			gauss_xy=np.concatenate((gauss_x,gauss_y)).T
+
+			zpos_rel_wx=np.where(np.abs(-pump_focus[0]+start_z)>1e-9,(pump_focus[0]+start_z),1e-9)
+			zpos_rel_wy=np.where(np.abs(-pump_focus[1]+start_z)>1e-9,(pump_focus[1]+start_z),1e-9)
+
+			start_angles_gauss=np.concatenate((-np.arcsin(gauss_x/(zpos_rel_wx+((zR_pump_x)**2)/(zpos_rel_wx))),-np.arcsin(gauss_y/(zpos_rel_wy+((zR_pump_y)**2)/(zpos_rel_wy))))).T
+
+			plt.figure()
+			plt.hist(start_angles_gauss.T[0])
+			plt.show()
+
+			#"Sampling the phasefunction for the N randomly generated angles. the weight will later be used to accept or reject samples"
+			weight=factor*phasefunction_vec(l_list=randN_l,theta_list=randN_theta,lpump=lpump,cutangle=cutangle+(start_angles_gauss.T)[0])
+
+			#"Select the samples that will be used for signal/idler generation"
+			gauss_pad=np.zeros(start_pos.shape)
+			gauss_pad[:gauss_xy.shape[0],:gauss_xy.shape[1]]=gauss_xy
+
+			sampled_params=np.concatenate((start_pos+gauss_pad,start_angles_gauss,np.array([randN_l]).T,np.array([randN_theta]).T),axis=1)#list of important simulation parameters
+
+			final_params=sampled_params[np.where(weight>rand_check)]#filters the params for the succesfully drawn samples
+			Nsuc=len(final_params)
+
+			[ray_start,ray_angle,ls,opening_angle]=[final_params[:,0:3].T,final_params[:,3:5].T,final_params[:,5:6].T,final_params[:,6:7].T]
+
+			rand_nr = np.random.uniform(0,1,len(final_params))
+			li = ls*(lpump)/(ls-lpump)
+			
+
+			azim=np.cos(rand_nr*np.pi)*opening_angle
+			horiz=np.sign(azim)*np.sign(opening_angle)*np.sqrt(opening_angle**2 - azim**2)
+
+			prop_angles=np.concatenate((azim,horiz)).T
+			
+
+			"Assembling the final list of parameters, combining all the angular and spatial effects"
+
+			Srays=[ray_start,prop_angles+ray_angle.T,ls]
+			Irays=[ray_start,-prop_angles+ray_angle.T,li]
+
+			lreturn_list.append(np.concatenate((ls.T,li.T)))
+		
+		return lreturn_list
+
+
+	def get_SPDC_rayset(self,N=1,nr_crystals=1,pumpray=[],pumpw0=0,pumpfocus=0,ls=[],theta_o=[]):
+
 		ray_list = []
 	
 		for i in range(nr_crystals):
@@ -226,6 +380,7 @@ class Simulation(object):
 			crystal=self.setup.crystals[i]
 			pumpray.position = np.array([pumpray.position[0],pumpray.position[1],crystal.fsurf])
 			walkoff_line_begin=pumpray.position
+
 			walkoff_line_end=walkoff_line_begin+crystal.getwalkoff(pumpray)+np.array([0,0,crystal.thickness])
 			ray_list.append(self.generate_N_rays(pumpray=pumpray,pos_beg=walkoff_line_begin,pos_end=walkoff_line_end,polarization = 'V',ls=ls,theta_o=theta_o))
 			pumpray.position += crystal.getwalkoff(pumpray)
@@ -253,7 +408,33 @@ class Simulation(object):
 		return [[Ray(position=[pos_beg[0]+rand_pos[i-1]*(pos_end[0]-pos_beg[0]),pos_beg[1]+rand_pos[i-1]*(pos_end[1]-pos_beg[1]),pos_beg[2]+(pos_end[2]-pos_beg[2])*rand_pos[i-1]],name="Sig_ray_{}".format(i),angles=angle_list[i],wavelength=ls[i],polarization = polarization) for i in range(N)],
 				 [Ray(position=[pos_beg[0]+rand_pos[i-1]*(pos_end[0]-pos_beg[0]),pos_beg[1]+rand_pos[i-1]*(pos_end[1]-pos_beg[1]),pos_beg[2]+(pos_end[2]-pos_beg[2])*rand_pos[i-1]],name="Idl_ray_{}".format(i),angles=-1*angle_list[i],wavelength=li[i],polarization = polarization) for i in range(N)]]
 
+	def filter_results(self,fibre_pos=np.array([0,0,0]),core_diam=0,Num_Ap=0,raw_return=True):
+		"Filter function giving singles and coincidences that enter the fibre at fibre_pos with specified dimensions"
 
+		filter_cond_match_list=[]
+		singles=[]
+		for ray_set in self.rays:
+			filter_cond_match=self.filter_func(rays=ray_set,fibre_pos=fibre_pos,core_diam=core_diam, Num_Ap = Num_Ap)
+			singles.append(list(compress(ray_set,filter_cond_match)))
+			filter_cond_match_list.append(filter_cond_match)
+
+		coincidences=[list(compress(self.rays[0],[x[0] and x[1] for x in zip(filter_cond_match_list[0],filter_cond_match_list[1])])),list(compress(self.rays[1],[x[0] and x[1] for x in zip(filter_cond_match_list[0],filter_cond_match_list[1])])),list(compress(self.rays[2],[x[0] and x[1] for x in zip(filter_cond_match_list[2],filter_cond_match_list[3])])),list(compress(self.rays[3],[x[0] and x[1] for x in zip(filter_cond_match_list[2],filter_cond_match_list[3])]))]
+
+		self.filtered_rays=map(np.array,coincidences)
+		print("added filtered singles to simulation,coincidences are {} and {},singles are {} and {}".format(len(coincidences[0]),len(coincidences[2]),len(singles[0])+len(singles[1]),len(singles[2])+len(singles[3])))
+
+
+	def filter_func(self,rays=[],fibre_pos=np.array([0,0,0]),core_diam=0,Num_Ap=0):
+
+		ray_pos_array 		=	np.array([ray.position for ray in rays])
+		ray_angles_array	=	np.array([ray.angles for ray in rays])
+
+		core_dist_check=np.linalg.norm(ray_pos_array-fibre_pos,axis=1)<core_diam/2
+		inc_angle_check=np.linalg.norm(ray_angles_array,axis=1)<Num_Ap
+
+		truth_list=[x[0] and x[1] for x in zip(core_dist_check,inc_angle_check)]
+
+		return truth_list
 
 
 
@@ -263,8 +444,8 @@ class ExpSetup(object):
 	def __init__(self,*args):
 		if len(args)==0:
 			raise Exception("Please provide the optical elements for the setup")
-		self.crystals = [x for x in list(args) if type(x) == Crystal]
-		self.elements = list(args)
+		self.elements = list(flatten([args]))
+		self.crystals = [x for x in self.elements if type(x) == Crystal]		
 		self.nr_elements = len(self.elements)
 		self.insert_air()
 		self.group()
@@ -481,23 +662,23 @@ class Crystal(Optic):
 		if ray.polarization == "H":
 			if self.orientation == "up":
 				w =  walkoff(theta=self.cutangle-ray.angles[0],coeff=c,lam=ray.wavelength,thickness=self.thickness-(ray.position[2]-self.fsurf))
-				return np.array([0,w,0])
+				return np.array([w,0,0])
 			elif self.orientation == "down":
 				w =  -1*walkoff(theta=self.cutangle+ray.angles[0],coeff=c,lam=ray.wavelength,thickness=self.thickness-(ray.position[2]-self.fsurf))
-				return np.array([0,w,0])
+				return np.array([w,0,0])
 			else:
 				w = 0
 				return np.array([0,w,0])
 		elif ray.polarization == "V":
 			if self.orientation == "left":
 				w =  walkoff(theta=self.cutangle-ray.angles[1],coeff=c,lam=ray.wavelength,thickness=self.thickness-(ray.position[2]-self.fsurf))
-				return np.array([w,0,0])
+				return np.array([0,w,0])
 			elif self.orientation == "right":
 				w = -1*walkoff(theta=self.cutangle+ray.angles[1],coeff=c,lam=ray.wavelength,thickness=self.thickness-(ray.position[2]-self.fsurf))
-				return np.array([w,0,0])
+				return np.array([0,w,0])
 			else:
 				w = 0
-				return np.array([w,0,0])
+				return np.array([0,w,0])
 
 
 	def translate(self,ray):
@@ -515,12 +696,21 @@ class Lens(Optic):
  					}
 
 	def __init__(self,**k):
+		super(Lens,self).__init__(**k)
 		try:
-			self.ROC 	= k.pop('ROC')
-			self.centre = k.pop('centre')
+			self.ROC 		= k.pop('ROC')
+			self.centre 	= k.pop('centre')
+			self.position 	= self.position+self.centre
 		except KeyError:
 			print("Please provide at least ROC (Radii of Curvature) and centre position to initiate a Lens object")
-		super(Lens,self).__init__(**k)
+	
+	def achromat(position=[],centre=[],f=0):
+		"Create achromat at position"
+		lens1=Lens(name='Lens1',material ="N-SF6HT",orientation=None,position=np.array(position)+np.array([0,0,-2.3/2]),thickness=2.3,ROC=[13.5,-10.6],centre=[centre[0],centre[1],0])
+		lens2=Lens(name='Lens2',material ="N-LAK22",orientation=None,position=np.array(position)+np.array([0,0,+1.3/2]),thickness=1.3,ROC=[-10.6,-47.8],centre=[centre[0],centre[1],0])
+		airf = Optic(name='Air_f',material="Air",orientation = None, position = np.array(position)+np.array([0,0,1.3+(f-1.3)/2]),thickness=f-1.3)
+
+		return [lens1,lens2,airf]
 
 	def getn(self,ray):
 		
@@ -528,9 +718,9 @@ class Lens(Optic):
 			raise Exception("Please provide me with a ray to calculate the refractive index for!")
 		
 		c=self.selm_coeff[self.material]
-		lam=ray.wavelength
+		lam=(1e-3)*ray.wavelength
 
-		return (1+(c[0]*(lam*1e-3)**2)/(c[1]-(lam*1e-3)**2)+(c[2]*(lam*1e-3)**2)/(c[3]-(lam*1e-3)**2)+(c[4]*(lam*1e-3)**2)/(c[5]-(lam*1e-3)**2))**(0.5)
+		return (1+(c[0]*(lam**2))/(lam**2-c[1])+(c[2]*(lam**2))/(lam**2-c[3])+(c[4]*(lam**2))/(lam**2-c[5]))**(0.5)
 
 	def getdn(self,ray):
 		
@@ -538,14 +728,12 @@ class Lens(Optic):
 			raise Exception("Please provide me with a ray to calculate the refractive index for!")
 		
 		c=self.selm_coeff[self.material]
-		lam=ray.wavelength
-		x=sp.Symbol('x')
-		ydiff=sp.diff((1+(c[0]*(x*1e-3)**2)/(c[1]-(x*1e-3)**2)+(c[2]*(x*1e-3)**2)/(c[3]-(x*1e-3)**2)+(c[4]*(x*1e-3)**2)/(c[5]-(x*1e-3)**2))**(0.5),x)
-		f = sp.lambdify(x,ydiff,'numpy')
-		return f(lam)
+		lam=ray.wavelength*1e-3
+	
+		return 1e-6*lam*((-(c[0]*c[1])/(c[1]-lam**2)**2-(c[2]*c[3])/(c[3]-lam**2)**2-(c[4]*c[5])/(c[5]-lam**2)**2)/sqrt(1+(c[0]*lam**2)/(-c[1]+lam**2)+(c[2]*lam**2)/(-c[3]+lam**2)+(c[4]*lam**2)/(-c[5]+lam**2)))
 
 	def translate(self,ray):
-		ray.position = (ray.position + np.array([np.tan(ray.angles[0])*(self.thickness-(ray.position[2]-self.fsurf)),np.tan(ray.angles[1])*(self.thickness-(ray.position[2]-self.fsurf)),(self.thickness-(ray.position[2]-self.fsurf))])).astype(float)
+		ray.position = (ray.position + np.array([tan(ray.angles[0])*(self.thickness-(ray.position[2]-self.fsurf)),tan(ray.angles[1])*(self.thickness-(ray.position[2]-self.fsurf)),(self.thickness-(ray.position[2]-self.fsurf))]))
 
 
 class HWP(Optic):
