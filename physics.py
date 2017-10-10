@@ -219,7 +219,7 @@ def get_SPDC_rayset_adv(self,N=1,nr_crystals=1,pumpray=[],pump_waist=[0,0],pump_
 		start_z = (start_pos.T)[2]
 
 		"Introduce effects of gaussian pump"
-		
+			
 		wzx,wzy = w0x*np.sqrt(1+((start_z-pump_focus[0])/zR_pump_x)**2),w0y*np.sqrt(1+((start_z-pump_focus[1])/zR_pump_y)**2)
 
 		sx,sy=wzx/sqrt(2),wzy/sqrt(2)
@@ -283,10 +283,3 @@ def generate_N_rays(N=1,polarization="V",ls=[],theta_o=[],pos_beg=[0,0],pos_end=
 
 	return [[Ray(position=[pos_beg[0]+rand_pos[i-1]*(pos_end[0]-pos_beg[0]),pos_beg[1]+rand_pos[i-1]*(pos_end[1]-pos_beg[1]),pos_beg[2]+(pos_end[2]-pos_beg[2])*rand_pos[i-1]],name="Sig_ray_{}".format(i),angles=angle_list[i],wavelength=ls[i],polarization = polarization) for i in range(N)],
 			 [Ray(position=[pos_beg[0]+rand_pos[i-1]*(pos_end[0]-pos_beg[0]),pos_beg[1]+rand_pos[i-1]*(pos_end[1]-pos_beg[1]),pos_beg[2]+(pos_end[2]-pos_beg[2])*rand_pos[i-1]],name="Idl_ray_{}".format(i),angles=-1*angle_list[i],wavelength=li[i],polarization = polarization) for i in range(N)]]
-
-
-
-
-
-
-
