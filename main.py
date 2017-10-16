@@ -17,6 +17,7 @@ import collections
 from itertools import compress
 
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 import time, sys
 from vpython import *
 import multiprocessing as mp
@@ -26,8 +27,8 @@ debug=False
 ################################################################################################################
 def Sellmeier(coeff=[0,0,0,0],lam = 785):
 	"Takes the wavelength [nm] array lam and coeff and outputs the refractive index. Used for BBO and YVO4"
-	
-	return (coeff[0]+(coeff[1])/((lam*1e-3)**2-coeff[2])-coeff[3]*(lam*1e-3)**2)**0.5
+	l=lam*1e-3
+	return np.sqrt(coeff[0]+(coeff[1])/((l)**2-coeff[2])-coeff[3]*(l)**2)
 
 def dSellmeier(coeff=[0,0,0,0],lam = 785):
 	"Takes the wavelength [nm] array lam and coeff and outputs the derivate of refractive index with respect to wavelength. Used for BBO and YVO4"
@@ -92,34 +93,31 @@ def update_progress(progress):
     sys.stdout.write(text)
     sys.stdout.flush()
 
-def phasefunction_vec(lpump=405,l_list=[785],theta_list=[0],coeff=[2.7359, 0.01878, 0.01822, 0.01354, 2.3753, 0.01224, 0.01667, 0.01516],cutangle=28.7991*np.pi/180,crystal_length=6):
+def phasefunction_vec(lpump=405,l_list=[785],theta_list=[0],coeff=[2.7359, 0.01878, 0.01822, 0.01354, 2.3753, 0.01224, 0.01667, 0.01516],cutangle=28.7991*np.pi/180,crystal_length=6,W=0.1):
 	"Input float of pump wavelength, and arrays size (1,n) of l_list, theta_list, cutangle and crystal_length output provides the array size (1,n) of the phasematching fucntion. "
 	c=coeff
 	#create lists of pump,signal and idler wavelengths
-	lp=lpump
-	ls=l_list
-	li=ls*lp/(ls-lp);
+
+	li=l_list*lpump/(l_list-lpump);
 	#calculate the angular frequency from wavelength
-	wp,ws,wi = (2*np.pi)/lp,(2*np.pi)/ls,(2*np.pi)/li
+	wp,ws,wi = (2*np.pi)/lpump,(2*np.pi)/l_list,(2*np.pi)/li
 
 	#calculate the ord/extraord refractive indices for the wavelenghts
-	nop = Sellmeier(coeff=c[0:4],lam=lp)
-	nep = Sellmeier(coeff=c[4:8],lam=lp)
-	nos = Sellmeier(coeff=c[0:4],lam=ls)
-	nes = Sellmeier(coeff=c[4:8],lam=ls)
+	nop = Sellmeier(coeff=c[0:4],lam=lpump)
+	nep = Sellmeier(coeff=c[4:8],lam=lpump)
+	nos = Sellmeier(coeff=c[0:4],lam=l_list)
+	# nes = Sellmeier(coeff=c[4:8],lam=l_list)
 	noi = Sellmeier(coeff=c[0:4],lam=li)
-	nei = Sellmeier(coeff=c[4:8],lam=li)
+	# nei = Sellmeier(coeff=c[4:8],lam=li)
 
 	#calculate the effective pump refractive index
 	npeff=np.sqrt(1/((np.cos(cutangle)/nop)**2+(np.sin(cutangle)/nep)**2))
 	L=crystal_length
-	W=0.1
 
-	thet_s=theta_list 																#opening angle of the signal photon
-	thet_i=np.arcsin(nos*ws*np.sin(thet_s)/(noi*wi))								#corresponding opening angle of the idler photon based on refractive indices
-	dkz=npeff*wp-nos*ws*np.cos(thet_s)-noi*wi*np.cos(thet_i)						#corresponding phase mismatch in z (propagationdirection) per unit length
-	dky=-nos*ws*np.sin(thet_s)+noi*wi*np.sin(thet_i)								#mismatch in pphase in y (direction perp to z) per unit length
-	phi=np.exp(-((W*1e6)**2)*(dky**2)/2)*(np.sin(0.5*dkz*L*1e6)/(0.5*dkz*L*1e6))**2	#sinc2() func of the mismatch over the length of the crystal
+	thet_i=np.arcsin(nos*ws*np.sin(theta_list)/(noi*wi))											#corresponding opening angle of the idler photon based on refractive indices
+	dkz=npeff*wp-nos*ws*np.cos(theta_list)-noi*wi*np.cos(thet_i)									#corresponding phase mismatch in z (propagationdirection) per unit length
+	dky=-nos*ws*np.sin(theta_list)+noi*wi*np.sin(thet_i)											#mismatch in pphase in y (direction perp to z) per unit length
+	phi=np.exp(-((W*1e6)**2)*(np.square(dky))/2)*np.square(np.sin(0.5*dkz*L*1e6)/(0.5*dkz*L*1e6))	#sinc2() func of the mismatch over the length of the crystal
 
 	return phi #(1,n) array
 
@@ -148,12 +146,176 @@ def dens_hist(data):
     hh[hh < thresh] = np.nan # fill the areas with low density by NaNs
 
     plt.imshow(np.flipud(hh.T),cmap='jet',extent=np.array(xyrange).flatten(), interpolation='none', origin='upper')
-    plt.title("xmean i {},xstd is {} and ymean is{}, ystd is {}".format(np.mean(xdat),np.std(xdat),np.mean(ydat),np.std(ydat)))
+    plt.title("xmean i {0:.2f},xstd is {0:.2f} and ymean is{0:.2f}, ystd is {0:.2f}".format(np.mean(xdat),np.std(xdat),np.mean(ydat),np.std(ydat)))
     plt.colorbar()   
     plt.show()
     
 
 ##################################################################################################################
+class Visualization(object):
+	"Class used to visualize the outcome of a simulation"
+
+	def __init__(self,**k):
+		self.simulation				= k.pop('simulation')
+		self.complete_results		=self.simulation.complete_results
+		self.surface_pos			=[x.fsurf for x in self.simulation.setup.elements]
+		self.graph_open				= False
+
+
+	def showtime(self,time_diff=False,bins=50,pos=0):
+		"this function shows the temporal results of the raytracing"
+		
+		if pos < self.surface_pos[-1]:
+			self.interpol_data(pos=pos)
+			plot_data = self.dummy_surface
+		else:
+			print("Please choose a position smaller than the end position of the simulation")
+
+
+		if not time_diff:
+			timelist=(1e15)*np.array([x[3][:] for x in plot_data])
+
+		else:
+			arrivtimes = (1e15)*np.array([x[3][:] for x in plot_data])
+
+			timelist = np.array([arrivtimes[0]-arrivtimes[1],arrivtimes[2]-arrivtimes[3]])
+		
+		plt.figure()
+		
+		for i,times in enumerate(timelist):
+			plt.hist(times,bins,alpha=0.5,label = "Photons from crystal {}".format(["one","two"][i % 2]))
+			print(np.mean(times),len(times))
+		plt.legend()
+		plt.xlabel("D_arrival time between signal and idles [fs]")
+		plt.ylabel("Occurance")
+		plt.show()
+
+	def showpos(self,pos=0):
+
+		"this function shows the position results of the raytracing"
+		if pos < self.surface_pos[-1]:
+			self.interpol_data(pos=pos)
+			plot_data = self.dummy_surface
+		else:
+			print("Please choose a position smaller than the end position of the simulation")
+
+		data_list = [x[0][:].T[0:2] for x in plot_data]
+	
+		f,axarr = plt.subplots(2,2,figsize=(10,10))
+		
+		for i,ax in enumerate(flatten(axarr)):
+			ax.clear()
+			data=data_list[i]
+			xdat, ydat = data[0],data[1]
+			x_range=np.array([-2,2])+np.mean(xdat)
+			y_range=np.array([-2,2])+np.mean(ydat)
+			xyrange = [x_range,y_range] # data range
+			bins = [100,100] # number of bins
+			thresh = 10	 #density threshold
+
+			# histogram the data
+			hh, locx, locy = scipy.histogram2d(xdat, ydat, range=xyrange, bins=bins)
+			posx = np.digitize(xdat, locx)
+			posy = np.digitize(ydat, locy)
+
+			#select points within the histogram
+			ind = (posx > 0) & (posx <= bins[0]) & (posy > 0) & (posy <= bins[1])
+			hhsub = hh[posx[ind] - 1, posy[ind] - 1] # values of the histogram where the points are
+			xdat1 = xdat[ind][hhsub < thresh] # low density points
+			ydat1 = ydat[ind][hhsub < thresh]
+			hh[hh < thresh] = np.nan # fill the areas with low density by NaNs
+
+			ax.imshow(np.flipud(hh.T),cmap='jet',extent=np.array(xyrange).flatten(), interpolation='none', origin='upper')
+			ax.set_title("xm ={:.2f}, xs ={:.2f}, ym = {:.2f}, ys ={:.2f}".format(np.mean(xdat),np.std(xdat),np.mean(ydat),np.std(ydat)))
+			# ax.set_fontsize(20)
+			# ax.colorbar()
+		plt.show()
+
+	def interpol_data(self,pos=0):
+
+		[index_rsurf,rsurf_z]=[[i,x] for i,x in enumerate(self.surface_pos) if x >= pos ][0]
+		[index_lsurf,lsurf_z]=[index_rsurf-1,self.surface_pos[index_rsurf-1]]
+
+		scale=(pos-lsurf_z)/(rsurf_z-lsurf_z)
+
+		self.dummy_surface=[[[] for i in range(5)] for j in range(4)]
+
+		for i,ray_list in enumerate(self.complete_results):
+			for j in [0,3]: #interpolate position and times
+				arrays=np.split(ray_list[j],[index_lsurf,index_rsurf+1],axis=-1)[1]
+				interpolation_matrix = np.sum(np.array([(1-scale),scale])*arrays,axis=-1)
+				self.dummy_surface[i][j]=interpolation_matrix
+			for j in [1,2,4]:#angles,wavelength and polarization  dont need to be interpolated
+				self.dummy_surface[i][j]=ray_list[j][...,index_lsurf]
+
+	def get_focus_pos(self,pos=0):
+		
+		if pos < self.surface_pos[-1]:
+			self.interpol_data(pos=pos)
+		else:
+			print("Please choose a position smaller than the end position of the simulation")
+
+		xmeans=np.array(list(map(np.mean,[x[0][:].T[0] for x in self.dummy_surface])))
+		ymeans=np.array(list(map(np.mean,[x[0][:].T[1] for x in self.dummy_surface])))
+		return np.mean(np.array([xmeans,ymeans]),axis=1) 
+
+	def filter_results(self,fibre_pos=np.array([0,0,0]),core_diam=0,Num_Ap=0):
+		"Filter function giving singles and coincidences that enter the fibre at fibre_pos with specified dimensions"
+
+		filter_cond_match_list=[]
+		self.singles=[]
+		self.coincidences=[]
+		
+		pos = fibre_pos[-1]
+
+		if pos < self.surface_pos[-1]:
+			self.interpol_data(pos=pos)
+		else:
+			print("Please choose a position smaller than the end position of the simulation")
+
+		for ray_set in self.dummy_surface:
+			pos = ray_set[0]
+			angle = ray_set[1]
+
+			filter_cond_match=self.filter_func(pos,angle,fibre_pos=fibre_pos,core_diam=core_diam, Num_Ap = Num_Ap)
+			filter_cond_match_list.append(filter_cond_match)
+
+			singles_list =  [ray[np.where(filter_cond_match)] for ray in ray_set[0:-1]]
+			self.singles.append(singles_list)
+
+		self.coincidences =[[x[np.where(np.logical_and(filter_cond_match_list[2*round(i/2.1)],filter_cond_match_list[2*round(i/2.1)+1]))] for x in ray_set[0:-1]] for i,ray_set in enumerate(self.dummy_surface)] #2*round(i/2.1) does (0,1,2,3) -> (0,0,2,2) to compare signal and idler
+
+
+	def filter_func(self,pos,angle,fibre_pos=np.array([0,0,0]),core_diam=0,Num_Ap=0):
+
+		"method called by filter_results to check if the rays fall in fibre pos with angle < NA"
+		core_dist_check=np.linalg.norm(pos-fibre_pos,axis=1)<core_diam/2
+		inc_angle_check=np.linalg.norm(angle,axis=1)<Num_Ap
+
+		return np.logical_and(core_dist_check,inc_angle_check)
+	
+	def show_filtered(self,time_diff=False,bins=50):
+		"this function shows the filtered results in a histogram"
+
+		if not time_diff:
+			timelist=[1e15*raylist[3] for raylist in self.coincidences]
+		else:
+			arrivtimes =[(1e15)*raylist[3] for raylist in self.coincidences]
+			timelist = [arrivtimes[0]-arrivtimes[1],arrivtimes[2]-arrivtimes[3]]
+		 
+		plt.figure()
+
+		
+		for times in timelist:
+			plt.hist(times,bins,alpha=0.5)
+			print(np.mean(times))
+		
+		plt.xlabel("arrival time with respect to earliest photon [fs]")
+		plt.ylabel("Occurance")
+		plt.show()
+
+		
+
 class Simulation(object):
 	"This class describes the interaction of Ray and ExpSetup, where the Rays are traced through the setup using the methods described in this class"
 
@@ -169,8 +331,8 @@ class Simulation(object):
 			self.numobj=self.setup.nr_elements      #Define the number of objects (without air) that will be traced
 			self.num_interfaces=len(self.setup.grouped_elements) #Number of surfaces in the setup
 
-			self.store_path = k.pop("store_path",False)	#Boolean that sets if the full path is being stored
-			self.store_time = k.pop("store_time",False)	#Boolean that sets if the time is being stored
+			self.store_path = k.pop("store_path",True)	#Boolean that sets if the full path is being stored
+			self.store_time = k.pop("store_time",True)	#Boolean that sets if the time is being stored
 
 		except KeyError:
 			print("Please provide rays and setup to initiate the simulation")
@@ -178,7 +340,7 @@ class Simulation(object):
 	def __repr__(self):
 		return "Simulation of a setup with {} elements".format(self.numobj)
 
-	def run(self,Ntot=100,store=False,multithread=False,gen_SPDC=False,pumpray=[],pump_waist=[0.04,0.04],pump_focus=[8,8],l_min=480,theta_min=-2,theta_max=2,cutangle=28.76*np.pi/180):
+	def run(self,Ntot=100,store=False,multithread=False,gen_SPDC=False,pumpray=[],pump_waist=[0.04,0.04],pump_focus=[8,8],l_min=480,theta_min=-2*np.pi/180,theta_max=2*np.pi/180,cutangle=28.76*np.pi/180):
 		"Most important method of the class. This will trace all the rays in self.start_list through the self.setup. If self.start_list is not present it will either get it from self.rays, or it will generate it using self.get_SPDC_rayset_adv. It will then store the result into self.complete_results"
 
 		self.complete_results = []
@@ -195,7 +357,7 @@ class Simulation(object):
 						self.lam_list 		= np.array([[x.wavelength] for x in list_of_rays])
 						self.position_list 	= np.array([x.position for x in list_of_rays])
 						self.time_list		= np.zeros((len(list_of_rays),1))
-						self.polarization 	= list_of_rays[0].polarization
+						self.polarization 	= np.array([x.polarization for x in list_of_rays])[[1]]
 						#print(self.angle_list.shape,self.lam_list.shape,self.position_list.shape,self.time_list.shape)
 
 						self.start_list.append([self.position_list,self.angle_list,self.lam_list,self.time_list,self.polarization]) # this start list is the shape of [(N,3,1),(N,2,1),(N,1,1),(N,1,1),(N,1,1)]
@@ -214,7 +376,7 @@ class Simulation(object):
 						self.lam_list 		= np.reshape(list_of_rays[2],(len(list_of_rays[2]),1))
 						self.position_list 	= list_of_rays[0]
 						self.time_list		= np.zeros((len(list_of_rays[0]),1))
-						self.polarization 	= list_of_rays[3]
+						self.polarization 	= np.reshape(list_of_rays[3][0],(1,1))
 						# print(self.position_list.shape,self.angle_list.shape,self.lam_list.shape,self.time_list.shape)
 						self.start_list.append([self.position_list,self.angle_list,self.lam_list,self.time_list,self.polarization]) # this start list is the shape of [(N,3,1),(N,2,1),(N,1,1),(N,1,1),(N,1,1)]
 
@@ -230,7 +392,7 @@ class Simulation(object):
 					self.lam_list 		= np.reshape(list_of_rays[2],(len(list_of_rays[2]),1))
 					self.position_list 	= list_of_rays[0]
 					self.time_list		= np.reshape(list_of_rays[3],(len(list_of_rays[3]),1))
-					self.polarization 	= list_of_rays[4]
+					self.polarization 	= np.reshape(list_of_rays[4],(1,1))
 					# print(self.angle_list.shape,self.lam_list.shape,self.position_list.shape,self.time_list.shape)
 					self.complete_ray_propagation() #run the raytracing
 
@@ -240,18 +402,18 @@ class Simulation(object):
 		
 		#Initialize the result arrays
 
-		self.angle_list_results		=np.zeros((self.angle_list.shape[0],self.angle_list.shape[1],1+len(grouped_elements)))
-		self.position_list_results  =np.zeros((self.position_list.shape[0],self.position_list.shape[1],1+len(grouped_elements)))
-		self.time_list_results		=np.zeros((self.time_list.shape[0],self.time_list.shape[1],1+len(grouped_elements)))
-		
+		self.angle_list_results			=	np.zeros((self.angle_list.shape[0],self.angle_list.shape[1],1+len(grouped_elements)))
+		self.position_list_results  	=	np.zeros((self.position_list.shape[0],self.position_list.shape[1],1+len(grouped_elements)))
+		self.time_list_results			=	np.zeros((self.time_list.shape[0],self.time_list.shape[1],1+len(grouped_elements)))
+		self.lam_list_results			=	np.zeros((self.lam_list.shape[0],self.lam_list.shape[1],1+len(grouped_elements)))
+		self.polarization_list_results	=	np.empty((self.polarization.shape[0],1+len(grouped_elements)),dtype=str)
 		#Entering the initial values
 		
 		self.angle_list_results[0:self.angle_list.shape[0],0:self.angle_list.shape[1],0] 			 	= self.angle_list		
 		self.position_list_results[0:self.position_list.shape[0],0:self.position_list.shape[1],0] 		= self.position_list
 		self.time_list_results[0:self.time_list.shape[0],0:self.time_list.shape[1],0]					= self.time_list
-		
-		#wavelength is constant
-		lam		= self.lam_list
+		self.lam_list_results[0:self.lam_list.shape[0],0:self.lam_list.shape[1],0]						= self.lam_list
+		self.polarization_list_results[0:self.polarization.shape[0],0]									= self.polarization
 
 		
 		if debug:
@@ -262,27 +424,29 @@ class Simulation(object):
 
 			for i,elements in enumerate(grouped_elements):
 				
-				elements[0].ray_pol,elements[1].ray_pol=self.polarization[0],self.polarization[0]
+				elements[0].ray_pol,elements[1].ray_pol=self.polarization_list_results[:,i][0],self.polarization_list_results[:,i][0]
 
 				cur_pos		=self.position_list_results[:,:,i]
 				cur_time	=self.time_list_results[:,:,i]
 				cur_angles	=self.angle_list_results[:,:,i]
+				cur_lam		=self.lam_list_results[:,:,i]
 				
 				#call the two primitives that do the calculations for raytracing 
-				new_pos=Simulation.translate(cur_pos,cur_angles,lam,elements[0])
-				new_angle=Simulation.refract(cur_pos,cur_angles,lam,elements)
+				new_pos=Simulation.translate(cur_pos,cur_angles,cur_lam,elements[0])
+				new_angle=Simulation.refract(cur_pos,cur_angles,cur_lam,elements)
 
 				#calculate the propagation time during this step
-				new_time=np.linalg.norm(new_pos-cur_pos,axis=1,keepdims=True)/v_group(lam=lam,n=elements[0].getn(cur_angles,lam),dn=elements[0].getdn(cur_angles,lam))
+				new_time=np.linalg.norm(new_pos-cur_pos,axis=1,keepdims=True)/v_group(lam=cur_lam,n=elements[0].getn(cur_angles,cur_lam),dn=elements[0].getdn(cur_angles,cur_lam))
+				new_lam = cur_lam #current version does not do anything to wavelength
 
-				self.angle_list_results[:,:,i+1] 	= new_angle
-				self.position_list_results[:,:,i+1]	= new_pos
-				self.time_list_results[:,:,i+1]		= new_time
+				self.angle_list_results[:,:,i+1] 		= new_angle
+				self.position_list_results[:,:,i+1]		= new_pos
+				self.time_list_results[:,:,i+1]			= new_time + self.time_list_results[:,:,i]
+				self.lam_list_results[:,:,i+1]			= new_lam
+				self.polarization_list_results[:,i+1]	= elements[0].ray_pol
 
-				self.polarization = elements[0].ray_pol
 
-		self.complete_results.append([self.position_list_results[:,:,-1],self.angle_list_results[:,:,-1],self.lam_list,np.sum(self.time_list_results,axis=(1,2)),np.full((len(self.lam_list),1),self.polarization,dtype=str)])
-
+		self.complete_results.append([self.position_list_results,self.angle_list_results,self.lam_list_results,self.time_list_results,self.polarization_list_results])
 
 	def refract(pos,angle,lam,optic_elements=[]):
 		"Method to transform the angles of the ray at an interface. If it encounters a lens, the thin lens formula is used, otherwise snells law is applied"
@@ -300,13 +464,25 @@ class Simulation(object):
 			indexfract = (nin/nout)		
 
 			# print(nin,nout,ray.angles,ray.position,element1.position,element2.position)
-
+			
 			if hasattr(element1,"ROC"): #check if first element is lens, if yes use back surface ROC of element1
 				position_on_lens=(pos-element1.position)[:,0:2]
-				angles =  np.arcsin(np.sin(angle)*(indexfract))+position_on_lens*((nin-nout)/(nout*element1.ROC[1]))
+
+				if not element1.asphere:					
+					angles =  np.arcsin(np.sin(angle)*(indexfract))+position_on_lens*((nin-nout)/(nout*element1.ROC[1]))
+				else:
+					dist_from_centre=np.linalg.norm(position_on_lens,axis=1)
+					ROClist=get_ROC_asphere(pos,element1.asph_coeff[1],element1.ROC[1])
+					angles =  np.arcsin(np.sin(angle)*(indexfract))+position_on_lens*((nin-nout)/(nout*element1.ROC[1]))
 			elif hasattr(element2,"ROC"): #check if second element is lens, if yes use front surface ROC of element2
 				position_on_lens=(pos-element2.position)[:,0:2]
-				angles =  np.arcsin(np.sin(angle)*(indexfract))+position_on_lens*((nin-nout)/(nout*element2.ROC[0]))
+				if not element2.asphere:					
+					# print(np.mean(position_on_lens))
+					angles =  np.arcsin(np.sin(angle)*(indexfract))+position_on_lens*((nin-nout)/(nout*element2.ROC[0]))
+				else:
+					dist_from_centre=np.linalg.norm(position_on_lens,axis=1)
+					ROClist=get_ROC_asphere(pos,element2.asph_coeff[0],element2.ROC[0])
+					angles =  np.arcsin(np.sin(angle)*(indexfract))+position_on_lens*((nin-nout)/(nout*element2.ROC[0]))
 			else:#if not lenses, use snells law
 				angles = np.arcsin(np.sin(angle)*(indexfract))
 
@@ -332,7 +508,7 @@ class Simulation(object):
 	
 		
 
-	def get_SPDC_rayset_adv(self,Ntot=1,nr_crystals=1,pumpray=[],pump_waist=[0,0],pump_focus=[0,0],cutangle=28.8*np.pi/180,l_min=0,l_max=0,theta_min=0,theta_max=0,factor=1e-2):
+	def get_SPDC_rayset_adv(self,Ntot=1,nr_crystals=1,pumpray=[],pump_waist=[0,0],pump_focus=[0,0],cutangle=28.8*np.pi/180,l_min=0,l_max=0,theta_min=0,theta_max=0,factor=0.1):
 		"This is a complex method that generates the starting positions/angles/wavelenght/polarization according to the Type-1 phasematching conditions in BBO"
 		#checks if the amount of trials is smaller than the maximum per loop: 10M.
 		if Ntot<10000000:
@@ -340,7 +516,7 @@ class Simulation(object):
 		else:
 			N=10000000
 
-		Number_of_cycles = int(ceil(Ntot/N)) #Number of cyles of 10M
+		Number_of_cycles = int(ceil(Ntot/N)) #Number of cyles of 20M
 
 		final_list = []						#Initialization of list to store the cycles
 
@@ -359,7 +535,7 @@ class Simulation(object):
 			rand_u = np.random.uniform(0,1,N)								#used for calculating position along walkoff path of ray
 			
 			randN_l		= np.random.uniform(l_min,2*lpump,N)				#generating random wavelengths for singal_min to 2*pump wavelength (phasefunction is symmetric in 2*pump wavelength)
-			randN_theta	= np.random.uniform(theta_min,theta_max,N)*np.pi/180#random opening angles 
+			randN_theta	= np.random.uniform(theta_min,theta_max,N)			#random opening angles 
 			rand_check	= np.random.uniform(0,1,N)							#the random numbers used in the check for the rejection sampling (could these be reused?)
 
 			return_list=[]
@@ -384,8 +560,8 @@ class Simulation(object):
 
 				sx,sy=wzx,wzy			#this beam waist is the standard deviation of the gaussian used for further sampling
 			
-				gauss_x=np.random.normal(np.zeros((1,N)),sx)	#random x position due to gaussian pump
-				gauss_y=np.random.normal(np.zeros((1,N)),sy)	#random y position due to gaussian pump
+				gauss_x=np.random.randn(1,N)*sx	#random x position due to gaussian pump
+				gauss_y=np.random.randn(1,N)*sy#random y position due to gaussian pump
 
 				gauss_xy=np.concatenate((gauss_x,gauss_y)).T
 
@@ -396,7 +572,7 @@ class Simulation(object):
 
 				#"Sampling the phasefunction for the N randomly generated angles. the weight will later be used to accept or reject samples. Factor is number <1, the smaller this number the smoother the distribution, but the more trys needed"
 				#TODO: need to choose which angle (a,b) it should add to the phasematching (currently always chooses a but it depends on crystal orientation)
-				weight=factor*phasefunction_vec(l_list=randN_l,theta_list=randN_theta,lpump=lpump,cutangle=cutangle+(start_angles_gauss.T)[0])
+				weight=factor*phasefunction_vec(l_list=randN_l,theta_list=randN_theta,lpump=lpump,cutangle=cutangle+(start_angles_gauss.T)[0],W = w0x)
 
 				#reshape the gaussian coordinates x,y to the format [x,y,0] 
 				gauss_pad=np.zeros(start_pos.shape)
@@ -426,7 +602,7 @@ class Simulation(object):
 
 				#TODO:Need to automatically decide on polarization, depends on wavematching/crystal orientation
 				Srays=[ray_start.T,(ray_angle.T+prop_angles),ls.T,np.full((Nsuc,1),'V',dtype=str)]
-				Irays=[ray_start.T,-(ray_angle.T+prop_angles),li.T,np.full((Nsuc,1),'V',dtype=str)]
+				Irays=[ray_start.T,(ray_angle.T-prop_angles),li.T,np.full((Nsuc,1),'V',dtype=str)]
 				
 				return_list.append(Srays)
 				return_list.append(Irays)
@@ -502,10 +678,10 @@ class Simulation(object):
 		"this function shows the temporal results of the raytracing"
 		if not time_diff:
 
-			timelist=(1e15)*np.array([x[3][:] for x in self.complete_results])
+			timelist=(1e15)*np.array([x[3][-1][:] for x in self.complete_results])
 
 		else:
-			arrivtimes = (1e15)*np.array([x[3][:] for x in self.complete_results])
+			arrivtimes = (1e15)*np.array([x[3][-1][:] for x in self.complete_results])
 
 			timelist = np.array([arrivtimes[0]-arrivtimes[1],arrivtimes[2]-arrivtimes[3]])
 		
@@ -529,19 +705,16 @@ class Simulation(object):
 	def calcfocus(self,factor=1,centre=[0,0,0]):
 		"this function returns the 'focus', given as the average of the standard deviation of the spatial distribution"
 
-		xmeans=list(map(np.mean,[x[0][:].T[0] for x in self.complete_results]))
-		ymeans=list(map(np.mean,[x[0][:].T[1] for x in self.complete_results]))
+		xmeans=np.array(list(map(np.mean,[x[0][:].T[0] for x in self.complete_results])))
+		ymeans=np.array(list(map(np.mean,[x[0][:].T[1] for x in self.complete_results])))
 
-		xmean = sum((xmeans-centre[0])**2)**0.5
-		ymean = sum((ymeans-centre[1])**2)**0.5
+		xmean = sum((xmeans-np.mean(xmeans))**2)**0.5
+		ymean = sum((ymeans-np.mean(ymeans))**2)**0.5
 
 		xfoc = np.array(list(map(np.std,[x[0][:].T[0] for x in self.complete_results])))
 		yfoc = np.array(list(map(np.std,[x[0][:].T[1] for x in self.complete_results])))
 
-		xfocdiff = abs(xfoc[0] + xfoc[1] - xfoc[2] - xfoc[3])
-		yfocdiff = abs(yfoc[0] + yfoc[1] - yfoc[2] - yfoc[3])
-
-		return (xfocdiff + yfocdiff) + factor*(xmean + ymean)
+		return sum(yfoc)+sum(xfoc)+factor*(xmean + ymean)
 
 	def get_focus_pos(self):
 		xmeans=np.array(list(map(np.mean,[x[0][:].T[0] for x in self.complete_results])))
@@ -827,8 +1000,12 @@ class Lens(Optic):
 			self.ROC 		= k.pop('ROC')
 			self.centre 	= k.pop('centre')
 			self.position 	= self.position+self.centre
+			self.asphere	= k.pop('apshere',False)
+			if self.asphere:
+				self.asph_coeff = k.pop('asph_coeff')
+
 		except KeyError:
-			print("Please provide at least ROC (Radii of Curvature) and centre position to initiate a Lens object")
+			print("Please provide at least ROC (Radii of Curvature) and centre position to initiate a Lens object, aspheric lenses need asph_coeff")
 	
 	def achromat(position=[],centre=[],f=0):
 		"Create achromat at position"
@@ -855,6 +1032,15 @@ class Lens(Optic):
 	def translate(self,pos,angle,lam):
 		
 		return (pos + np.array([np.tan(angle[:,0])*(self.thickness-(pos[:,2]-self.fsurf)),np.tan(angle[:,1])*(self.thickness-(pos[:,2]-self.fsurf)),(self.thickness-(pos[:,2]-self.fsurf))]).T)
+	
+	def get_ROC_asphere(self,pos,coeffs,ROC):
+		"Calculate the ROC of an asphere, depending on the position of the ray to the lens"
+		c=coeffs
+		Y=np.norm(pos[0:2]-self.position[0:2],axis=1)
+
+		sag=(Y**2)/(ROC*(1+np.sqrt(1-((1+c[0])*Y**2)/ROC**2)))+(c[1])*Y**2+(c[2])*Y**4+(c[3])*Y**6+(c[4])*Y**8+(c[5])*Y**10
+
+		return 0.5*sag+Y**2/(2*sag)
 
 
 class HWP(Optic):

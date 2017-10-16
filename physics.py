@@ -53,7 +53,7 @@ def Sellmeier(coeff=[0,0,0,0],lam = 785):
 # 	n_ext=Sellmeier(coeff[4:8],lam)
 # 	return 0.5*thickness*(n_ext_effective(coeff=coeff,theta=theta,lam=lam)**2)*((n_ord**-2)-(n_ext**-2))*sin(2*theta)
 
-def phasefunction(lpump=405,l_range=785,theta_range=0,coeff=[2.7359, 0.01878, 0.01822, 0.01354, 2.3753, 0.01224, 0.01667, 0.01516],cutangle=28.7991*np.pi/180,crystal_length=6,
+def phasefunction(W=0.1,lpump=405,l_range=785,theta_range=0,coeff=[2.7359, 0.01878, 0.01822, 0.01354, 2.3753, 0.01224, 0.01667, 0.01516],cutangle=28.7991*np.pi/180,crystal_length=6,
 	show_plot=False,return_grid=False):
 	if isinstance(l_range,list):
 		lsignal=l_range[2]*np.array(list(range(round((1/l_range[2])*l_range[0]),round((1/l_range[2])*l_range[1]),1)))
@@ -92,7 +92,6 @@ def phasefunction(lpump=405,l_range=785,theta_range=0,coeff=[2.7359, 0.01878, 0.
 	thet_cut=cutangle
 	npeff=np.sqrt(1/((np.cos(thet_cut)/nop)**2+(np.sin(thet_cut)/nep)**2))
 	L=crystal_length
-	W=0.1
 
 
 
@@ -103,6 +102,7 @@ def phasefunction(lpump=405,l_range=785,theta_range=0,coeff=[2.7359, 0.01878, 0.
 	thet_i=np.arcsin(nos*wsmesh*np.sin(thet_s)/(noi*wimesh))
 	dkz=npeff*wp-nos*wsmesh*np.cos(thet_s)-noi*wimesh*np.cos(thet_i)
 	dky=-nos*wsmesh*np.sin(thet_s)+noi*wimesh*np.sin(thet_i)
+	print(dky)
 	phi=np.exp(-((W*1e6)**2)*(dky**2)/2)*(np.sin(0.5*dkz*L*1e6)/(0.5*dkz*L*1e6))**2
 
 	result = phi
